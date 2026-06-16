@@ -31,7 +31,13 @@ from tgpostmaker.keyboards import (
     draft_controls_keyboard,
     main_menu_keyboard,
 )
-from tgpostmaker.publisher import PostingRightsError, PublishError, ensure_bot_can_post, publish_draft
+from tgpostmaker.publisher import (
+    PostingRightsError,
+    PublishError,
+    ensure_bot_can_post,
+    extract_caption_overflow_text,
+    publish_draft,
+)
 from tgpostmaker.schedule_parser import (
     ScheduleParseError,
     format_schedule,
@@ -196,6 +202,7 @@ async def message_waiting_post(message: Message, state: FSMContext, repo: Reposi
         channel_id=channel_id,
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
+        overflow_text=extract_caption_overflow_text(message),
     )
     await state.clear()
     await message.answer(

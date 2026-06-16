@@ -35,6 +35,7 @@ class DraftRecord:
     source_chat_id: int
     source_message_id: int
     buttons_json: str
+    overflow_text: str | None
     scheduled_at: str | None
     status: str
     locked_at: str | None
@@ -80,6 +81,7 @@ class Repository:
                     source_chat_id INTEGER NOT NULL,
                     source_message_id INTEGER NOT NULL,
                     buttons_json TEXT NOT NULL DEFAULT '[]',
+                    overflow_text TEXT,
                     scheduled_at TEXT,
                     status TEXT NOT NULL,
                     locked_at TEXT,
@@ -102,6 +104,7 @@ class Repository:
                 );
                 """
             )
+            await _ensure_column(db, "drafts", "overflow_text", "TEXT")
             await db.commit()
 
     async def upsert_channel(
@@ -180,6 +183,7 @@ class Repository:
         source_chat_id: int,
         source_message_id: int,
         buttons_json: str = "[]",
+        overflow_text: str | None = None,
     ) -> DraftRecord:
         now = utc_now_iso()
         async with self._connect() as db:
@@ -187,9 +191,9 @@ class Repository:
                 """
                 INSERT INTO drafts(
                     admin_id, channel_id, source_chat_id, source_message_id,
-                    buttons_json, status, created_at, updated_at
+                    buttons_json, overflow_text, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     admin_id,
@@ -197,6 +201,7 @@ class Repository:
                     source_chat_id,
                     source_message_id,
                     buttons_json,
+                    overflow_text,
                     STATUS_DRAFT,
                     now,
                     now,
@@ -366,6 +371,18 @@ async def _fetchall(
         return await cursor.fetchall()
 
 
+async def _ensure_column(
+    db: aiosqlite.Connection,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    rows = await _fetchall(db, f"PRAGMA table_info({table_name})")
+    if any(str(row["name"]) == column_name for row in rows):
+        return
+    await db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+
 def _channel_from_row(row: aiosqlite.Row) -> ChannelRecord:
     return ChannelRecord(
         chat_id=int(row["chat_id"]),
@@ -385,6 +402,7 @@ def _draft_from_row(row: aiosqlite.Row) -> DraftRecord:
         source_chat_id=int(row["source_chat_id"]),
         source_message_id=int(row["source_message_id"]),
         buttons_json=str(row["buttons_json"]),
+        overflow_text=row["overflow_text"],
         scheduled_at=row["scheduled_at"],
         status=str(row["status"]),
         locked_at=row["locked_at"],

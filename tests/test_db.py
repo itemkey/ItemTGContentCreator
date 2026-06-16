@@ -27,8 +27,10 @@ async def test_channel_selection_and_draft_lifecycle(tmp_path) -> None:
         channel_id=channel.chat_id,
         source_chat_id=1,
         source_message_id=10,
+        overflow_text="long caption",
     )
     assert draft.status == STATUS_DRAFT
+    assert draft.overflow_text == "long caption"
 
     buttons_json = serialize_buttons(parse_buttons("Open - t.me/open"))
     draft = await repo.set_draft_buttons(draft.id, buttons_json)
@@ -47,4 +49,3 @@ async def test_channel_selection_and_draft_lifecycle(tmp_path) -> None:
     assert published is not None
     assert published.status == STATUS_PUBLISHED
     assert published.published_message_id == 77
-
