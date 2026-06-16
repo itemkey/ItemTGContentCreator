@@ -9,7 +9,6 @@ from tgpostmaker.db import DraftRecord, Repository
 
 
 TELEGRAM_CAPTION_LIMIT = 1024
-TELEGRAM_TEXT_LIMIT = 4096
 
 
 class PostingRightsError(RuntimeError):
@@ -25,32 +24,6 @@ def extract_caption_overflow_text(message: Any) -> str | None:
     if not caption or len(caption) <= TELEGRAM_CAPTION_LIMIT:
         return None
     return str(caption)
-
-
-def split_telegram_text(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> list[str]:
-    if limit <= 0:
-        raise ValueError("Text chunk limit must be positive")
-
-    chunks: list[str] = []
-    remaining = text.strip()
-    while len(remaining) > limit:
-        split_at = max(
-            remaining.rfind("\n", 0, limit + 1),
-            remaining.rfind(" ", 0, limit + 1),
-        )
-        if split_at <= 0:
-            split_at = limit
-
-        chunk = remaining[:split_at].rstrip()
-        if not chunk:
-            chunk = remaining[:limit]
-            split_at = limit
-        chunks.append(chunk)
-        remaining = remaining[split_at:].lstrip()
-
-    if remaining:
-        chunks.append(remaining)
-    return chunks
 
 
 async def ensure_bot_can_post(bot: Any, channel_id: int) -> None:
@@ -75,21 +48,7 @@ async def publish_draft(bot: Any, repo: Repository, draft: DraftRecord) -> int |
     try:
         await ensure_bot_can_post(bot, draft.channel_id)
         markup = to_inline_keyboard_markup(deserialize_buttons(draft.buttons_json))
-        if draft.overflow_text:
-            sent = await bot.copy_message(
-                chat_id=draft.channel_id,
-                from_chat_id=draft.source_chat_id,
-                message_id=draft.source_message_id,
-                caption="",
-            )
-            await _send_overflow_text(bot, draft.channel_id, draft.overflow_text, markup)
-        else:
-            sent = await bot.copy_message(
-                chat_id=draft.channel_id,
-                from_chat_id=draft.source_chat_id,
-                message_id=draft.source_message_id,
-                reply_markup=markup,
-            )
+        sent = await _copy_draft_message(bot, draft, markup)
         message_id = getattr(sent, "message_id", None)
         await repo.mark_published(draft.id, message_id)
         return message_id
@@ -99,22 +58,42 @@ async def publish_draft(bot: Any, repo: Repository, draft: DraftRecord) -> int |
             raise
         if _is_caption_too_long_error(exc):
             raise PublishError(
-                "Подпись к медиа длиннее лимита Telegram. Создайте черновик заново: "
-                "бот сохранит длинную подпись отдельно и опубликует её текстом под медиа."
+                "Telegram не разрешил скопировать медиа с такой длинной подписью через Bot API."
             ) from exc
         raise PublishError(str(exc)) from exc
 
 
-async def _send_overflow_text(bot: Any, channel_id: int, text: str, markup: Any | None) -> None:
-    chunks = split_telegram_text(text)
-    for index, chunk in enumerate(chunks):
-        is_last = index == len(chunks) - 1
-        await bot.send_message(
-            chat_id=channel_id,
-            text=chunk,
-            disable_web_page_preview=True,
-            reply_markup=markup if is_last else None,
+async def _copy_draft_message(bot: Any, draft: DraftRecord, markup: Any | None) -> Any:
+    if draft.overflow_text:
+        return await _copy_then_attach_markup(bot, draft, markup)
+
+    try:
+        return await bot.copy_message(
+            chat_id=draft.channel_id,
+            from_chat_id=draft.source_chat_id,
+            message_id=draft.source_message_id,
+            reply_markup=markup,
         )
+    except Exception as exc:
+        if markup is not None and _is_caption_too_long_error(exc):
+            return await _copy_then_attach_markup(bot, draft, markup)
+        raise
+
+
+async def _copy_then_attach_markup(bot: Any, draft: DraftRecord, markup: Any | None) -> Any:
+    sent = await bot.copy_message(
+        chat_id=draft.channel_id,
+        from_chat_id=draft.source_chat_id,
+        message_id=draft.source_message_id,
+    )
+    message_id = getattr(sent, "message_id", None)
+    if markup is not None and message_id is not None:
+        await bot.edit_message_reply_markup(
+            chat_id=draft.channel_id,
+            message_id=message_id,
+            reply_markup=markup,
+        )
+    return sent
 
 
 def _is_caption_too_long_error(exc: Exception) -> bool:
